@@ -1,0 +1,46 @@
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant OS as Order Service<br/>(API + Order DB)
+    participant OR as Saga Orchestrator<br/>(Order Service)
+    participant MB as Message Broker
+    participant IS as Inventory Service
+    participant PS as Payment Service
+    participant PG as Gateway Financeiro<br/>(externo)
+
+    C->>OS: POST /orders [sync]
+    OS->>OS: TX local: Order=PENDING, Saga=STARTED
+    OS-->>C: 202 Accepted (orderId)
+
+    OR->>MB: ReserveStock (sagaId)
+    MB->>IS: ReserveStock
+    IS->>IS: TX local: reserva estoque (Reservation=RESERVED)
+    IS->>MB: StockReserved
+    MB->>OR: StockReserved
+    OR->>OR: Saga=STOCK_RESERVED
+
+    OR->>MB: ProcessPayment (sagaId)
+    MB->>PS: ProcessPayment
+    PS->>PG: POST /charges [Idempotency-Key=sagaId]
+    PG-->>PS: 402 pagamento recusado
+    PS->>PS: TX local: Payment=REJECTED
+    PS->>MB: PaymentRejected (sagaId, motivo)
+    MB->>OR: PaymentRejected
+
+    rect rgb(255, 232, 232)
+        Note over OR,OS: Início da compensação (Saga=COMPENSATING)
+        OR->>OR: Saga=COMPENSATING
+        OR->>MB: ReleaseStock (sagaId) [transação compensatória]
+        MB->>IS: ReleaseStock
+        IS->>IS: TX local: Reservation=RELEASED, estoque devolvido
+        IS->>MB: StockReleased (sagaId)
+        MB->>OR: StockReleased
+        OR->>OS: CancelOrder: Order=CANCELED (PAYMENT_DECLINED)
+        OR->>OR: Saga=COMPENSATED
+    end
+
+    OR->>MB: OrderCanceled (evento de domínio)
+    C->>OS: GET /orders/orderId (consulta ou notificação)
+    OS-->>C: status=CANCELED, motivo=PAYMENT_DECLINED
+
+    Note over OR,IS: ReleaseStock e CancelOrder são retentáveis e idempotentes: repetir não causa efeito extra

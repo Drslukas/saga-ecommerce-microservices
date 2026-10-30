@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant GW as API Gateway
+    participant OS as Order Service<br/>(API + Order DB)
+    participant OR as Saga Orchestrator<br/>(Order Service)
+    participant MB as Message Broker
+    participant IS as Inventory Service
+    participant PS as Payment Service
+    participant PG as Gateway Financeiro<br/>(externo)
+
+    C->>GW: POST /orders (itens, meio de pagamento) [sync]
+    GW->>OS: POST /orders [sync]
+    OS->>OS: TX local: Order=PENDING, Saga=STARTED, Outbox
+    OS-->>GW: 202 Accepted (orderId, status=PENDING)
+    GW-->>C: 202 Accepted (orderId)
+
+    Note over OR,MB: A partir daqui tudo é assíncrono (command/reply)
+
+    OR->>MB: ReserveStock (sagaId, orderId, itens)
+    MB->>IS: ReserveStock
+    IS->>IS: TX local: reserva estoque + grava messageId
+    IS->>MB: StockReserved (sagaId)
+    MB->>OR: StockReserved
+    OR->>OR: Saga=STOCK_RESERVED
+
+    OR->>MB: ProcessPayment (sagaId, orderId, valor)
+    MB->>PS: ProcessPayment
+    PS->>PG: POST /charges [sync, timeout 5s, Idempotency-Key=sagaId]
+    PG-->>PS: 200 aprovado
+    PS->>PS: TX local: Payment=APPROVED + grava messageId
+    PS->>MB: PaymentApproved (sagaId)
+    MB->>OR: PaymentApproved
+    OR->>OR: Saga=PAYMENT_APPROVED
+
+    OR->>MB: CommitStock (sagaId)
+    MB->>IS: CommitStock
+    IS->>IS: TX local: reserva vira baixa definitiva
+    IS->>MB: StockCommitted (sagaId)
+    MB->>OR: StockCommitted
+
+    OR->>OS: TX local: Order=APPROVED, Saga=COMPLETED
+    OR->>MB: OrderApproved (evento de domínio)
+    C->>GW: GET /orders/orderId (consulta ou notificação)
+    GW-->>C: status=APPROVED

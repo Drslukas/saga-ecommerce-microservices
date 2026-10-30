@@ -1,0 +1,12 @@
+stateDiagram-v2
+    [*] --> STARTED: POST /orders
+    STARTED --> STOCK_RESERVED: StockReserved
+    STARTED --> COMPENSATING: StockReservationFailed ou timeout esgotado
+    STOCK_RESERVED --> PAYMENT_APPROVED: PaymentApproved
+    STOCK_RESERVED --> COMPENSATING: PaymentRejected ou timeout esgotado
+    PAYMENT_APPROVED --> COMPLETED: StockCommitted
+    COMPENSATING --> COMPENSATED: StockReleased + CancelOrder
+    COMPLETED --> [*]
+    COMPENSATED --> [*]
+    COMPENSATING --> FAILED_MANUAL: compensação esgotou tentativas (DLQ + alerta)
+    FAILED_MANUAL --> [*]

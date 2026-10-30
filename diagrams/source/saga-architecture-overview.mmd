@@ -1,0 +1,38 @@
+flowchart TB
+    CL([Cliente Web / App]) -->|"HTTPS sync<br/>POST /orders"| GW[API Gateway]
+    GW -->|"HTTPS sync"| OAPI
+
+    subgraph ORD["Order Service (dono do estado da Saga)"]
+        direction LR
+        OAPI[Order API] --> ORCH{{"Saga Orchestrator<br/>Create Order Saga"}}
+        OAPI --- ODB[("Order DB")]
+        ORCH --- SDB[("Saga State DB<br/>saga_instance<br/>saga_step_log")]
+        ORCH --- OBX[("Outbox")]
+    end
+
+    OBX <-->|"commands (async)<br/>replies (async)"| BUS
+
+    subgraph BUS["Message Broker: Kafka ou RabbitMQ"]
+        direction LR
+        T1>"inventory.commands"]
+        T2>"payment.commands"]
+        T3>"saga.replies"]
+        T4>"order.events"]
+        DLQ>"*.dlq Dead Letter Queues"]
+    end
+
+    BUS <-->|"ReserveStock / ReleaseStock / CommitStock<br/>StockReserved / StockReleased / StockCommitted"| IC
+    BUS <-->|"ProcessPayment<br/>PaymentApproved / PaymentRejected"| PC
+
+    subgraph INV["Inventory Service"]
+        direction LR
+        IC[Command Handler<br/>Idempotent Consumer] --- IDB[("Inventory DB<br/>stock, reservation,<br/>processed_messages")]
+    end
+
+    subgraph PAY["Payment Service"]
+        direction LR
+        PC[Command Handler<br/>Idempotent Consumer] --- PDB[("Payment DB<br/>payment,<br/>processed_messages")]
+        PC --> CB[["Retry +<br/>Circuit Breaker"]]
+    end
+
+    CB -->|"HTTPS sync<br/>Idempotency-Key"| EXT[/"Gateway Financeiro<br/>externo"/]
